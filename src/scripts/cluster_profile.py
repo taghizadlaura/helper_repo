@@ -1,23 +1,84 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from collections import defaultdict
-from src.utils.plot_radar import plot_radar
+import os 
 
-LIWC_list = [
- "LIWC_Negate", "LIWC_Swear", "LIWC_Social", "LIWC_Family",
- "LIWC_Friends", "LIWC_Humans", "LIWC_Affect", "LIWC_Posemo", "LIWC_Negemo",
- "LIWC_Anx", "LIWC_Anger", "LIWC_Sad", "LIWC_CogMech", "LIWC_Sexual",
- "LIWC_Relativ", "LIWC_Achiev", "LIWC_Leisure", "LIWC_Money",
- "LIWC_Relig", "LIWC_Death"
-]
+current_dir = os.getcwd()
 
-#text_features = ["num_chars","num_chars_no_space","frac_alpha","frac_upper"] 
-properties_name = LIWC_list # text_features + 
+def radar_plot(cluster_norm, feature_names):
+    """
+    Builds one radar chart with a dropdown menu to select the cluster.
+    """
+
+    cluster_ids = list(cluster_norm.index)
+
+    fig = go.Figure()
+
+    for i, cluster_id in enumerate(cluster_ids):
+        values = cluster_norm.loc[cluster_id].values.tolist()
+
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=feature_names,
+            fill='toself',
+            name=f"Cluster {cluster_id}",
+            visible=True if i == 0 else False  # show only first
+        ))
+
+    # Dropdown menu to select cluster
+    buttons = []
+    for i, cluster_id in enumerate(cluster_ids):
+        visible_list = [False] * len(cluster_ids)
+        visible_list[i] = True
+
+        buttons.append(dict(
+            label=f"{cluster_id}",
+            method="update",
+            args=[{"visible": visible_list},
+                  {"title": f"Cluster {cluster_id}: LIWC Profile"}]
+        ))
+
+    fig.update_layout(
+        title=f"Cluster {cluster_ids[0]}: LIWC Profile",
+        polar=dict(radialaxis=dict(visible=False)),
+        showlegend=False,
+        width=700,
+        height=700,
+        updatemenus=[dict(
+            type="dropdown",
+            x=1.15,                
+            y=1.05,
+            xanchor="right",       
+            yanchor="top",
+            buttons=buttons,
+            direction="down",
+            showactive=True
+        )]
+    )
+
+    name= "cluster_profile.html"
+    file_path = os.path.join(current_dir, 'images', name)
+
+    fig.write_html(file_path)
+
+    fig.show()
+
 
 
 def cluster_profiles(df, partition_all):
-    # Conflict score per cluster
+
+    LIWC_list = [
+        "LIWC_Negate", "LIWC_Swear", "LIWC_Social", "LIWC_Family",
+        "LIWC_Friends", "LIWC_Humans", "LIWC_Affect", "LIWC_Posemo", "LIWC_Negemo",
+        "LIWC_Anx", "LIWC_Anger", "LIWC_Sad", "LIWC_CogMech", "LIWC_Sexual",
+        "LIWC_Relativ", "LIWC_Achiev", "LIWC_Leisure", "LIWC_Money",
+        "LIWC_Relig", "LIWC_Death"
+    ]
+
+    properties_name = LIWC_list
+
+    # Compute most negative clusters
     cluster_conflict = (
         df[df["LINK_SENTIMENT"] == -1]
             .groupby("cluster_source")
@@ -25,33 +86,30 @@ def cluster_profiles(df, partition_all):
             .rename("conflict_score")
     )
 
-    # Cluster linguistic profiles
-    cluster_profiles = (
-        df
-            .groupby("cluster_source")[properties_name]
-            .mean()
-            .join(cluster_conflict, how="left")
-            .fillna({"conflict_score": 0})
+    # Compute mean LIWC for each cluster
+    cluster_profiles_df = (
+        df.groupby("cluster_source")[properties_name]
+          .mean()
+          .join(cluster_conflict, how="left")
+          .fillna({"conflict_score": 0})
     )
 
-    # Select 5 highest & 5 lowest conflict clusters
+    # Select top 5 and bottom 5 
+    top5 = cluster_profiles_df.nlargest(10, "conflict_score")
 
-    top5 = cluster_profiles.nlargest(5, "conflict_score")
-    bottom5 = cluster_profiles.nsmallest(5, "conflict_score")
 
-    clusters_to_plot = pd.concat([top5, bottom5])
-
-    # Build cluster to subreddit mapping
+    # Map cluster to subreddits
     cluster_to_subreddits = defaultdict(list)
     for subreddit, cluster in partition_all.items():
         cluster_to_subreddits[cluster].append(subreddit)
 
-    # Normalize features (min-max across all clusters)
-    cluster_norm = (clusters_to_plot[properties_name] - clusters_to_plot[properties_name].min()) / \
-                (clusters_to_plot[properties_name].max() - clusters_to_plot[properties_name].min())
-    for cluster_id in cluster_norm.index:
-        conflict = clusters_to_plot.loc[cluster_id, "conflict_score"]
-        row = cluster_norm.loc[[cluster_id]]   # keep as 1-row DataFrame
-        plot_radar(cluster_id, row, properties_name)
+    # Normalize for visualization
+    cluster_norm = (
+        ( top5[properties_name] - top5[properties_name].min())
+        / (top5[properties_name].max() -  top5[properties_name].min())
+    )
+
+    # Plot the radar 
+    radar_plot(cluster_norm, properties_name)
 
     return cluster_norm, cluster_to_subreddits

@@ -1,69 +1,119 @@
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
 
-def create_cluster_race_plot(df_title, timestamp_col='TIMESTAMP'):
+def create_cluster_race_plot(
+        df,
+        timestamp_col='TIMESTAMP',
+        group_col='cluster_source',
+        value_col=None,
+        period='M',
+        output_html='images/race_plot.html'
+    ):
     """
-    Create an interactive bar race plot showing cluster message volume through time
-    
-    Parameters:
-    df_title: DataFrame containing the data
-    timestamp_col: Name of the timestamp column
+    Create an animated bar race plot showing cluster metrics over time.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame containing at least a timestamp column and a cluster column.
+    timestamp_col : str, default 'TIMESTAMP'
+        Name of the timestamp column.
+    group_col : str, default 'cluster_source'
+        Column representing the cluster/group identifier.
+    value_col : str or None, default None
+        Column to aggregate. 
+        If None → counts rows (message count).
+    period : str, default 'M'
+        Pandas period frequency, e.g.:
+        'M' monthly, 'D' daily, 'W' weekly, 'Q' quarterly.
+    output_html : str or None, default 'images/race_plot.html'
+        Path to save HTML output. If None, file is not saved.
+
+    Returns
+    -------
+    fig : plotly.graph_objs.Figure
+        The animated Plotly bar race figure.
     """
-    
-    # Prepare data: count messages per cluster per time period
-    df_time_series = df_title.groupby([timestamp_col, 'cluster_source']).size().reset_index(name='message_count')
-    
-    # Convert timestamp to proper datetime if needed and extract month/year
-    if not pd.api.types.is_datetime64_any_dtype(df_time_series[timestamp_col]):
-        df_time_series[timestamp_col] = pd.to_datetime(df_time_series[timestamp_col])
-    
-    # Create a period column (month-year)
-    df_time_series['period'] = df_time_series[timestamp_col].dt.to_period('M').astype(str)
-    
-    # Aggregate by period and cluster
-    df_period = df_time_series.groupby(['period', 'cluster_source'])['message_count'].sum().reset_index()
-    
-    # Sort by period and message count for better visualization
-    df_period = df_period.sort_values(['period', 'message_count'], ascending=[True, False])
-    
-    # Create the animated bar chart
+
+    # --- Validate columns ---
+    for col in [timestamp_col, group_col]:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in DataFrame")
+
+    # --- Prepare data ---
+    df_copy = df.copy()
+
+    # Ensure timestamp format
+    if not pd.api.types.is_datetime64_any_dtype(df_copy[timestamp_col]):
+        df_copy[timestamp_col] = pd.to_datetime(df_copy[timestamp_col])
+
+    # Create period label
+    df_copy['period'] = df_copy[timestamp_col].dt.to_period(period).astype(str)
+
+    # Aggregate values
+    if value_col is None:
+        # Count occurrences (default behaviour)
+        agg_df = (
+            df_copy.groupby(['period', group_col])
+            .size()
+            .reset_index(name='metric_value')
+        )
+        metric_label = "Message Count"
+    else:
+        if value_col not in df_copy.columns:
+            raise ValueError(f"value_col '{value_col}' not in DataFrame")
+
+        agg_df = (
+            df_copy.groupby(['period', group_col])[value_col]
+            .sum()
+            .reset_index(name='metric_value')
+        )
+        metric_label = value_col
+
+    # Sort for better animation transitions
+    agg_df = agg_df.sort_values(['period', 'metric_value'], ascending=[True, False])
+
+    # --- Create animated chart ---
     fig = px.bar(
-        df_period,
-        x='message_count',
-        y='cluster_source',
+        agg_df,
+        x='metric_value',
+        y=group_col,
         animation_frame='period',
         orientation='h',
-        color='cluster_source',
-        title='Cluster Message Volume Evolution Over Time',
+        color=group_col,
+        title=f"{metric_label} Evolution Over Time",
         labels={
-            'message_count': 'Number of Messages',
-            'cluster_source': 'Cluster ID',
-            'period': 'Time Period'
+            'metric_value': metric_label,
+            group_col: "Cluster",
+            'period': "Time Period"
         },
         height=600
     )
-    
-    # Update layout for better visualization
+
+    # Layout improvements
     fig.update_layout(
-        xaxis_title="Number of Messages",
-        yaxis_title="Cluster ID",
+        xaxis_title=metric_label,
+        yaxis_title="Cluster",
         showlegend=False,
         font=dict(size=12)
     )
-    
-    # Adjust animation settings
-    fig.layout.updatemenus[0].buttons[0].args[1]["frame"]["duration"] = 1000
-    fig.layout.updatemenus[0].buttons[0].args[1]["transition"]["duration"] = 500
-    
+
+    # Animation speed (if exists)
+    if fig.layout.updatemenus:
+        btn = fig.layout.updatemenus[0].buttons[0]
+        btn.args[1]["frame"]["duration"] = 1000     # 1 second per frame
+        btn.args[1]["transition"]["duration"] = 400
+
+    # Display figure
     fig.show()
 
-    fig.write_html(
-    'images/race_plot.html',
+    # Save HTML output
+    if output_html:
+        fig.write_html(
+            output_html,
             include_plotlyjs=True,
-            config={
-                'responsive': True,
-                'displayModeBar': True
-            },
-            auto_open=False)
+            config={'responsive': True, 'displayModeBar': True},
+            auto_open=False
+        )
+
+    return fig
